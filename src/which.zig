@@ -1,11 +1,15 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const fs = std.fs;
+const Io = std.Io;
+const Environ = std.process.Environ;
 
 /// Find an executable on PATH. Returns the full path or null if not found.
 /// Caller owns the returned slice.
-pub fn which(allocator: Allocator, name: []const u8) !?[]const u8 {
-    const path_env = std.posix.getenv("PATH") orelse return null;
+///
+/// `environ` supplies the process environment (PATH lookup). In `main`, use
+/// `init.minimal.environ`; in tests, use `std.testing.environ`.
+pub fn which(allocator: Allocator, io: Io, environ: Environ, name: []const u8) !?[]const u8 {
+    const path_env = environ.getPosix("PATH") orelse return null;
 
     var it = std.mem.splitScalar(u8, path_env, ':');
     while (it.next()) |dir| {
@@ -16,7 +20,7 @@ pub fn which(allocator: Allocator, name: []const u8) !?[]const u8 {
         defer allocator.free(full_path);
 
         // Check if the file exists and is executable
-        if (isExecutable(full_path)) {
+        if (isExecutable(io, full_path)) {
             return try allocator.dupe(u8, full_path);
         }
     }
@@ -24,9 +28,8 @@ pub fn which(allocator: Allocator, name: []const u8) !?[]const u8 {
     return null;
 }
 
-fn isExecutable(path: []const u8) bool {
-    // Use Zig's posix wrapper (works without libc on Linux via raw syscall)
-    std.posix.faccessat(std.posix.AT.FDCWD, path, std.posix.X_OK, 0) catch return false;
+fn isExecutable(io: Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(io, path, .{ .execute = true }) catch return false;
     return true;
 }
 
@@ -34,7 +37,7 @@ test "which finds a known binary" {
     const allocator = std.testing.allocator;
 
     // sh should exist on any unix system
-    const result = try which(allocator, "sh");
+    const result = try which(allocator, std.testing.io, std.testing.environ, "sh");
     try std.testing.expect(result != null);
     defer allocator.free(result.?);
 
@@ -45,14 +48,14 @@ test "which finds a known binary" {
 test "which returns null for nonexistent binary" {
     const allocator = std.testing.allocator;
 
-    const result = try which(allocator, "this_binary_definitely_does_not_exist_12345");
+    const result = try which(allocator, std.testing.io, std.testing.environ, "this_binary_definitely_does_not_exist_12345");
     try std.testing.expect(result == null);
 }
 
 test "which finds tmux if installed" {
     const allocator = std.testing.allocator;
 
-    const result = try which(allocator, "tmux");
+    const result = try which(allocator, std.testing.io, std.testing.environ, "tmux");
     if (result) |path| {
         defer allocator.free(path);
         try std.testing.expect(std.mem.endsWith(u8, path, "/tmux"));

@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const process = std.process;
+const Io = std.Io;
+const Environ = std.process.Environ;
 
 const proc = @import("process.zig");
 const protocol = @import("protocol.zig");
@@ -54,6 +56,7 @@ pub const CapturePaneOptions = struct {
 
 pub const Server = struct {
     allocator: Allocator,
+    io: Io,
     tmux_bin: []const u8,
     tmux_bin_owned: bool, // whether we need to free tmux_bin
     socket_name: ?[]const u8,
@@ -64,12 +67,12 @@ pub const Server = struct {
     base_args_buf: [4][]const u8,
     base_args_len: usize,
 
-    pub fn init(allocator: Allocator, opts: ServerOptions) !Server {
+    pub fn init(allocator: Allocator, io: Io, environ: Environ, opts: ServerOptions) !Server {
         // Find tmux binary
         const bin_result = if (opts.tmux_bin) |b|
             .{ allocator.dupe(u8, b) catch return error.OutOfMemory, true }
         else blk: {
-            const found = try which_mod.which(allocator, "tmux");
+            const found = try which_mod.which(allocator, io, environ, "tmux");
             if (found) |f| {
                 break :blk .{ f, true };
             }
@@ -81,6 +84,7 @@ pub const Server = struct {
 
         var self = Server{
             .allocator = allocator,
+            .io = io,
             .tmux_bin = tmux_bin,
             .tmux_bin_owned = tmux_bin_owned,
             .socket_name = opts.socket_name,
@@ -120,13 +124,13 @@ pub const Server = struct {
 
     /// Execute a tmux command as a subprocess. Returns raw result.
     pub fn exec(self: *Server, args: []const []const u8) !TmuxResult {
-        return proc.run(self.allocator, self.tmux_bin, self.baseArgs(), args);
+        return proc.run(self.allocator, self.io, self.tmux_bin, self.baseArgs(), args);
     }
 
     /// Execute a tmux command, return stdout on success or error on failure.
     /// Caller owns returned slice.
     pub fn execChecked(self: *Server, args: []const []const u8) ![]u8 {
-        return proc.runChecked(self.allocator, self.tmux_bin, self.baseArgs(), args);
+        return proc.runChecked(self.allocator, self.io, self.tmux_bin, self.baseArgs(), args);
     }
 
     // --- High-level operations (one-shot for now, control mode later) ---
@@ -155,7 +159,7 @@ pub const Server = struct {
     /// Create a new session. Returns the session ID (e.g., "$3").
     /// Caller owns returned slice.
     pub fn newSession(self: *Server, opts: NewSessionOptions) ![]u8 {
-        var args: std.ArrayList([]const u8) = .{};
+        var args: std.ArrayList([]const u8) = .empty;
         defer args.deinit(self.allocator);
 
         try args.append(self.allocator, "new-session");
@@ -193,7 +197,7 @@ pub const Server = struct {
     /// Create a new window in the given target session. Returns window ID.
     /// Caller owns returned slice.
     pub fn newWindow(self: *Server, target: []const u8, opts: NewWindowOptions) ![]u8 {
-        var args: std.ArrayList([]const u8) = .{};
+        var args: std.ArrayList([]const u8) = .empty;
         defer args.deinit(self.allocator);
 
         try args.append(self.allocator, "new-window");
@@ -228,7 +232,7 @@ pub const Server = struct {
     /// Split a window/pane. Returns new pane ID.
     /// Caller owns returned slice.
     pub fn splitWindow(self: *Server, target: []const u8, opts: SplitWindowOptions) ![]u8 {
-        var args: std.ArrayList([]const u8) = .{};
+        var args: std.ArrayList([]const u8) = .empty;
         defer args.deinit(self.allocator);
 
         try args.append(self.allocator, "split-window");
@@ -264,7 +268,7 @@ pub const Server = struct {
 
     /// Send keys to a pane.
     pub fn sendKeys(self: *Server, target: []const u8, keys: []const u8, opts: SendKeysOptions) !void {
-        var args: std.ArrayList([]const u8) = .{};
+        var args: std.ArrayList([]const u8) = .empty;
         defer args.deinit(self.allocator);
 
         try args.append(self.allocator, "send-keys");
@@ -291,7 +295,7 @@ pub const Server = struct {
     /// Capture pane contents. Returns the captured text.
     /// Caller owns returned slice.
     pub fn capturePane(self: *Server, target: []const u8, opts: CapturePaneOptions) ![]u8 {
-        var args: std.ArrayList([]const u8) = .{};
+        var args: std.ArrayList([]const u8) = .empty;
         defer args.deinit(self.allocator);
 
         try args.append(self.allocator, "capture-pane");
@@ -369,7 +373,7 @@ pub const Server = struct {
 // These use a unique socket name to avoid interfering with the user's tmux.
 
 fn skipIfNoTmux(allocator: Allocator) !?[]const u8 {
-    const found = which_mod.which(allocator, "tmux") catch return null;
+    const found = which_mod.which(allocator, std.testing.io, std.testing.environ, "tmux") catch return null;
     return found;
 }
 
@@ -379,7 +383,7 @@ test "Server init and deinit" {
     if (tmux_bin == null) return;
     defer allocator.free(tmux_bin.?);
 
-    var server = try Server.init(allocator, .{});
+    var server = try Server.init(allocator, std.testing.io, std.testing.environ, .{});
     defer server.deinit();
 
     try std.testing.expect(std.mem.endsWith(u8, server.tmux_bin, "/tmux"));
@@ -391,7 +395,7 @@ test "Server init with explicit binary" {
     if (tmux_bin == null) return;
     defer allocator.free(tmux_bin.?);
 
-    var server = try Server.init(allocator, .{ .tmux_bin = tmux_bin.? });
+    var server = try Server.init(allocator, std.testing.io, std.testing.environ, .{ .tmux_bin = tmux_bin.? });
     defer server.deinit();
 
     try std.testing.expectEqualStrings(tmux_bin.?, server.tmux_bin);
@@ -403,7 +407,7 @@ test "Server init with socket name" {
     if (tmux_bin == null) return;
     defer allocator.free(tmux_bin.?);
 
-    var server = try Server.init(allocator, .{ .socket_name = "test-sock" });
+    var server = try Server.init(allocator, std.testing.io, std.testing.environ, .{ .socket_name = "test-sock" });
     defer server.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), server.base_args_len);
@@ -417,7 +421,7 @@ test "Server exec version" {
     if (tmux_bin == null) return;
     defer allocator.free(tmux_bin.?);
 
-    var server = try Server.init(allocator, .{});
+    var server = try Server.init(allocator, std.testing.io, std.testing.environ, .{});
     defer server.deinit();
 
     var result = try server.exec(&.{"-V"});
@@ -435,7 +439,7 @@ test "Server session lifecycle" {
 
     const sock_name = "libtmux-zig-test";
 
-    var server = try Server.init(allocator, .{ .socket_name = sock_name });
+    var server = try Server.init(allocator, std.testing.io, std.testing.environ, .{ .socket_name = sock_name });
     defer server.deinit();
 
     // Create a detached session
@@ -465,7 +469,7 @@ test "Server snapshot" {
 
     const sock_name = "libtmux-zig-test-snap";
 
-    var server = try Server.init(allocator, .{ .socket_name = sock_name });
+    var server = try Server.init(allocator, std.testing.io, std.testing.environ, .{ .socket_name = sock_name });
     defer server.deinit();
 
     // Create a session

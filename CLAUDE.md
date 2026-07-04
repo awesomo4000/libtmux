@@ -8,7 +8,7 @@ A Zig library (`libtmux`) that wraps tmux operations. Provides a test binary tha
 
 ## Language
 
-Zig 0.15.2
+Zig 0.16.0
 
 ## Build Commands
 
@@ -24,7 +24,7 @@ zig test src/Server.zig  # run a single file's tests
 - `src/root.zig` — library root (public API, what consumers `@import("libtmux")`)
 - `src/main.zig` — test binary that exercises the library
 - `src/Server.zig` — Server struct: init, exec, high-level ops (newSession, capturePane, etc.)
-- `src/process.zig` — subprocess runner: `run()` and `runChecked()` using `process.Child.run()`
+- `src/process.zig` — subprocess runner: `run()` and `runChecked()` using `std.process.run(gpa, io, ...)`
 - `src/protocol.zig` — control mode line parser: `%begin`/`%end`/`%error` blocks, all notification types
 - `src/snapshot.zig` — state tree parser: `list-panes -a -F` output → Snapshot (sessions > windows > panes)
 - `src/which.zig` — find executables on PATH
@@ -36,8 +36,10 @@ zig test src/Server.zig  # run a single file's tests
 
 The library uses a flat API — everything goes through `Server`. Pass target IDs (pane `%N`, window `@N`, session `$N` or name) as strings. No object graph.
 
+`Server.init` takes an `io: std.Io` and an `environ: std.process.Environ` (needed for all I/O and for PATH-based tmux discovery). In `main`, use the "juicy" entry point `pub fn main(init: std.process.Init)` and pass `init.io` / `init.minimal.environ`. In tests, use the `std.testing.io` / `std.testing.environ` globals.
+
 ```zig
-var server = try libtmux.Server.init(allocator, .{ .socket_name = "my-sock" });
+var server = try libtmux.Server.init(allocator, io, environ, .{ .socket_name = "my-sock" });
 defer server.deinit();
 
 const sid = try server.newSession(.{ .name = "work" });
@@ -49,13 +51,15 @@ defer snap.deinit();
 
 High-level methods return owned slices (caller must free). Methods that produce no output return `void` or error.
 
-## Zig 0.15.2 Patterns Used
+## Zig 0.16.0 Patterns Used
 
-- ArrayList: `std.ArrayList(T){}` init, `.deinit(allocator)`, `.append(allocator, item)`, `.toOwnedSlice(allocator)`
-- No `std.time.sleep` — use `std.Thread.sleep`
-- No `posix.stat` — use `std.c.faccessat()` for execute checks
-- `process.Child.run()` for subprocess execution
-- See `~/WORKFLOWS/zig-0.15.2-cheatsheet.md` for migration reference
+- `Io` threading: all OS-touching calls take `std.Io`. Obtain via juicy main (`init.io`), `std.testing.io`, or a standalone `std.Io.Threaded`.
+- ArrayList: `std.ArrayList(T) = .empty` init (the `.{}` empty literal no longer works), `.deinit(allocator)`, `.append(allocator, item)`, `.toOwnedSlice(allocator)`
+- Subprocess: `std.process.run(gpa, io, .{ .argv, .stdout_limit = .limited(n), .stderr_limit = .limited(n) })`; `Term` tags are lowercase (`.exited`)
+- Args: `init.minimal.args.iterate()` (no `std.process.args()`); env via `environ.getPosix("PATH")` (no `std.posix.getenv`)
+- Files: `std.Io.File.stdout().writer(io, &buf)`; executable check via `std.Io.Dir.cwd().access(io, path, .{ .execute = true })` (no `faccessat`)
+- Renames: `std.io.Writer` → `std.Io.Writer`, `std.mem.trimRight` → `trimEnd`
+- See `~/WORKFLOWS/zig-0.16.0-cheatsheet.md` for full migration reference
 
 ## Reference Material (gitignored)
 

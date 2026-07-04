@@ -1,7 +1,7 @@
 const std = @import("std");
 const libtmux = @import("libtmux");
 
-const Writer = std.io.Writer;
+const Writer = std.Io.Writer;
 const Stringify = std.json.Stringify;
 
 // ── Subcommand enum ─────────────────────────────────────────────────
@@ -65,7 +65,7 @@ fn cmdVersion(server: *libtmux.Server, w: *Writer) !void {
         return error.TmuxCommandFailed;
     }
 
-    const trimmed = std.mem.trimRight(u8, result.stdout, "\n\r");
+    const trimmed = std.mem.trimEnd(u8, result.stdout, "\n\r");
     try writeJson(w, .{ .version = trimmed });
 }
 
@@ -398,18 +398,13 @@ fn tmuxErrorMessage(err: anyerror) []const u8 {
 
 // ── Main ────────────────────────────────────────────────────────────
 
-pub fn main() void {
-    std.process.exit(run());
-}
-
-fn run() u8 {
-    var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer _ = gpa_impl.deinit();
-    const gpa = gpa_impl.allocator();
+pub fn main(init: std.process.Init) u8 {
+    const gpa = init.gpa;
+    const io = init.io;
 
     // Collect args into a slice
-    var arg_iter = std.process.args();
-    var arg_list: std.ArrayList([]const u8) = .{};
+    var arg_iter = init.minimal.args.iterate();
+    var arg_list: std.ArrayList([]const u8) = .empty;
     defer arg_list.deinit(gpa);
 
     while (arg_iter.next()) |arg| {
@@ -417,16 +412,16 @@ fn run() u8 {
     }
     const argv = arg_list.items;
 
-    return runWithArgs(gpa, argv);
+    return runWithArgs(gpa, io, init.minimal.environ, argv);
 }
 
-fn runWithArgs(gpa: std.mem.Allocator, argv: []const []const u8) u8 {
+fn runWithArgs(gpa: std.mem.Allocator, io: std.Io, environ: std.process.Environ, argv: []const []const u8) u8 {
     var stdout_buf: [4096]u8 = undefined;
-    var stdout_file_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stdout_file_writer = std.Io.File.stdout().writer(io, &stdout_buf);
     const stdout = &stdout_file_writer.interface;
 
     var stderr_buf: [4096]u8 = undefined;
-    var stderr_file_writer = std.fs.File.stderr().writer(&stderr_buf);
+    var stderr_file_writer = std.Io.File.stderr().writer(io, &stderr_buf);
     const stderr = &stderr_file_writer.interface;
 
     // argv[0] = program name, argv[1] = socket-name, argv[2] = subcommand, argv[3..] = rest
@@ -468,7 +463,7 @@ fn runWithArgs(gpa: std.mem.Allocator, argv: []const []const u8) u8 {
     // "default" means no socket arg (use tmux default server)
     const socket_name: ?[]const u8 = if (std.mem.eql(u8, socket_name_arg, "default")) null else socket_name_arg;
 
-    var server = libtmux.Server.init(gpa, .{ .socket_name = socket_name }) catch |err| {
+    var server = libtmux.Server.init(gpa, io, environ, .{ .socket_name = socket_name }) catch |err| {
         writeJsonError(stderr, tmuxErrorName(err), tmuxErrorMessage(err));
         stderr.flush() catch {};
         return 1;

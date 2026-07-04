@@ -2,7 +2,7 @@
 
 Zig library for driving tmux programmatically. Wraps tmux operations with typed structs and provides a JSON-output CLI binary (`tmuxwrap`).
 
-Requires Zig 0.15.2+ and tmux installed on the system.
+Requires Zig 0.16.0+ and tmux installed on the system.
 
 ## Building
 
@@ -169,17 +169,19 @@ const libtmux = @import("libtmux");
 
 The `Server` struct is the main entry point. It finds the tmux binary, manages socket arguments, and executes commands.
 
+`init` takes an `io: std.Io` and an `environ: std.process.Environ` in addition to the allocator and options. In a program, get these from the entry point `pub fn main(init: std.process.Init)` as `init.io` and `init.minimal.environ`. In tests, use `std.testing.io` and `std.testing.environ`.
+
 Initialize with auto-detected tmux binary:
 
 ```zig
-var server = try libtmux.Server.init(allocator, .{});
+var server = try libtmux.Server.init(allocator, io, environ, .{});
 defer server.deinit();
 ```
 
 Initialize with a specific socket name:
 
 ```zig
-var server = try libtmux.Server.init(allocator, .{
+var server = try libtmux.Server.init(allocator, io, environ, .{
     .socket_name = "my-app",
 });
 defer server.deinit();
@@ -188,7 +190,7 @@ defer server.deinit();
 Initialize with an explicit tmux binary path:
 
 ```zig
-var server = try libtmux.Server.init(allocator, .{
+var server = try libtmux.Server.init(allocator, io, environ, .{
     .tmux_bin = "/opt/homebrew/bin/tmux",
     .socket_path = "/tmp/my-app.sock",
 });
@@ -459,7 +461,7 @@ try server.killServer();
 Find an executable on PATH:
 
 ```zig
-const path = try libtmux.which(allocator, "tmux");
+const path = try libtmux.which(allocator, io, environ, "tmux");
 if (path) |p| {
     defer allocator.free(p);
     std.debug.print("tmux at: {s}\n", .{p});

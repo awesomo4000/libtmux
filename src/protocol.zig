@@ -206,7 +206,7 @@ fn parseOutput(rest: []const u8) !Notification {
 /// tmux escapes non-printable characters and backslash as \xxx (octal).
 /// Caller owns returned slice.
 pub fn decodeOctalEscapes(allocator: Allocator, data: []const u8) ![]u8 {
-    var result: std.ArrayList(u8) = .{};
+    var result: std.ArrayList(u8) = .empty;
     errdefer result.deinit(allocator);
 
     var i: usize = 0;

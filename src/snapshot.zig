@@ -153,7 +153,7 @@ pub fn parseSnapshot(allocator: Allocator, raw_output: []const u8) !Snapshot {
     errdefer allocator.free(raw);
 
     // First pass: parse all records into flat list
-    var records: std.ArrayList(PaneRecord) = .{};
+    var records: std.ArrayList(PaneRecord) = .empty;
     defer records.deinit(allocator);
 
     var lines = std.mem.splitScalar(u8, raw, '\n');
@@ -173,7 +173,7 @@ pub fn parseSnapshot(allocator: Allocator, raw_output: []const u8) !Snapshot {
 
     // Second pass: build tree by iterating records and grouping
     // Records come sorted by session, then window, then pane from tmux.
-    var session_list: std.ArrayList(SessionInfo) = .{};
+    var session_list: std.ArrayList(SessionInfo) = .empty;
     errdefer {
         for (session_list.items) |s| {
             for (s.windows) |w| allocator.free(w.panes);
@@ -182,10 +182,10 @@ pub fn parseSnapshot(allocator: Allocator, raw_output: []const u8) !Snapshot {
         session_list.deinit(allocator);
     }
 
-    var window_list: std.ArrayList(WindowInfo) = .{};
+    var window_list: std.ArrayList(WindowInfo) = .empty;
     defer window_list.deinit(allocator);
 
-    var pane_list: std.ArrayList(PaneInfo) = .{};
+    var pane_list: std.ArrayList(PaneInfo) = .empty;
     defer pane_list.deinit(allocator);
 
     var prev_session_id: []const u8 = records.items[0].session_id;
